@@ -124,6 +124,17 @@ def get_current_user(
         raise unauthorized
 
 
+def get_current_admin(
+    current_user: User = Depends(get_current_user),
+) -> User:
+    if current_user.role != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Administrator access required.",
+        )
+
+    return current_user
+
 @router.get("/me", response_model=UserResponse)
 def get_me(
     current_user: User = Depends(get_current_user),
