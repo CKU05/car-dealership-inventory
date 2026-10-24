@@ -11,6 +11,19 @@ from app.vehicle_schemas import (
     VehicleUpdate,
 )
 
+from decimal import Decimal
+
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    Query,
+    Response,
+    status,
+)
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
 router = APIRouter(prefix="/api/vehicles", tags=["Vehicles"])
 
 
@@ -20,6 +33,58 @@ def list_vehicles(
     db: Session = Depends(get_db),
 ):
     return db.scalars(select(Vehicle).order_by(Vehicle.id)).all()
+
+
+@router.get("/search", response_model=list[VehicleResponse])
+def search_vehicles(
+    make: str | None = Query(default=None, min_length=1),
+    model: str | None = Query(default=None, min_length=1),
+    category: str | None = Query(default=None, min_length=1),
+    min_price: Decimal | None = Query(default=None, ge=0),
+    max_price: Decimal | None = Query(default=None, ge=0),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if (
+        min_price is not None
+        and max_price is not None
+        and min_price > max_price
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="min_price cannot exceed max_price.",
+        )
+
+    statement = select(Vehicle)
+
+    if make is not None:
+        statement = statement.where(
+            Vehicle.make.ilike(f"%{make.strip()}%")
+        )
+
+    if model is not None:
+        statement = statement.where(
+            Vehicle.model.ilike(f"%{model.strip()}%")
+        )
+
+    if category is not None:
+        statement = statement.where(
+            Vehicle.category.ilike(f"%{category.strip()}%")
+        )
+
+    if min_price is not None:
+        statement = statement.where(
+            Vehicle.price >= min_price
+        )
+
+    if max_price is not None:
+        statement = statement.where(
+            Vehicle.price <= max_price
+        )
+
+    statement = statement.order_by(Vehicle.id)
+
+    return db.scalars(statement).all()
 
 
 @router.post(

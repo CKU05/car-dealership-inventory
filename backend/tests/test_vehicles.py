@@ -211,3 +211,145 @@ def test_admin_cannot_create_vehicle_with_negative_quantity(
     )
 
     assert response.status_code == 422
+
+
+def test_search_by_make(client, admin_token, user_token):
+    client.post(
+        "/api/vehicles",
+        json=vehicle_payload(),
+        headers=auth(admin_token),
+    )
+
+    response = client.get(
+        "/api/vehicles/search?make=toyota",
+        headers=auth(user_token),
+    )
+
+    assert response.status_code == 200
+    assert len(response.json()) == 1
+    assert response.json()[0]["make"] == "Toyota"
+
+
+def test_search_by_category(client, admin_token, user_token):
+    cars = [
+        {
+            "make": "Toyota",
+            "model": "Fortuner",
+            "category": "SUV",
+            "price": "3500000.00",
+            "quantity": 2,
+        },
+        {
+            "make": "Honda",
+            "model": "City",
+            "category": "Sedan",
+            "price": "1200000.00",
+            "quantity": 4,
+        },
+    ]
+
+    for car in cars:
+        client.post(
+            "/api/vehicles",
+            json=car,
+            headers=auth(admin_token),
+        )
+
+    response = client.get(
+        "/api/vehicles/search?category=SUV",
+        headers=auth(user_token),
+    )
+
+    assert response.status_code == 200
+    assert len(response.json()) == 1
+    assert response.json()[0]["model"] == "Fortuner"
+
+
+def test_search_by_price_range(client, admin_token, user_token):
+    prices = ["1200000.00", "1500000.00", "3500000.00"]
+
+    for index, price in enumerate(prices):
+        payload = vehicle_payload()
+        payload["model"] = f"Car{index}"
+        payload["price"] = price
+
+        client.post(
+            "/api/vehicles",
+            json=payload,
+            headers=auth(admin_token),
+        )
+
+    response = client.get(
+        "/api/vehicles/search"
+        "?min_price=1300000&max_price=2000000",
+        headers=auth(user_token),
+    )
+
+    assert response.status_code == 200
+    results = response.json()
+
+    assert len(results) == 1
+    assert results[0]["model"] == "Car1"
+
+
+def test_combined_filters(client, admin_token, user_token):
+    cars = [
+        {
+            "make": "Toyota",
+            "model": "Fortuner",
+            "category": "SUV",
+            "price": "3500000.00",
+            "quantity": 2,
+        },
+        {
+            "make": "Toyota",
+            "model": "Corolla",
+            "category": "Sedan",
+            "price": "1500000.00",
+            "quantity": 5,
+        },
+        {
+            "make": "Honda",
+            "model": "CRV",
+            "category": "SUV",
+            "price": "1800000.00",
+            "quantity": 3,
+        },
+    ]
+
+    for car in cars:
+        client.post(
+            "/api/vehicles",
+            json=car,
+            headers=auth(admin_token),
+        )
+
+    response = client.get(
+        "/api/vehicles/search"
+        "?make=Toyota&category=SUV&min_price=3000000",
+        headers=auth(user_token),
+    )
+
+    assert response.status_code == 200
+    results = response.json()
+
+    assert len(results) == 1
+    assert results[0]["model"] == "Fortuner"
+
+
+def test_search_requires_authentication(client):
+    response = client.get("/api/vehicles/search?make=Toyota")
+
+    assert response.status_code == 401
+
+
+def test_search_rejects_invalid_price_range(
+    client,
+    user_token,
+):
+    response = client.get(
+        "/api/vehicles/search?min_price=2000000&max_price=1000000",
+        headers=auth(user_token),
+    )
+
+    assert response.status_code == 422
