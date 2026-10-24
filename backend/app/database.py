@@ -36,3 +36,11 @@ def check_db_connection() -> bool:
         return True
     except Exception:
         return False
+
+from collections.abc import Generator
+from sqlalchemy.orm import Session
+
+
+def get_db() -> Generator[Session, None, None]:
+    with SessionLocal() as session:
+        yield session
