@@ -24,6 +24,10 @@ from fastapi import (
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from sqlalchemy import select, update
+
+from app.inventory_schemas import RestockRequest
+
 router = APIRouter(prefix="/api/vehicles", tags=["Vehicles"])
 
 
@@ -153,3 +157,74 @@ def delete_vehicle(
     db.commit()
 
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/{vehicle_id}/purchase", response_model=VehicleResponse)
+def purchase_vehicle(
+    vehicle_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    statement = (
+        update(Vehicle)
+        .where(
+            Vehicle.id == vehicle_id,
+            Vehicle.quantity > 0,
+        )
+        .values(quantity=Vehicle.quantity - 1)
+        .returning(Vehicle.id)
+    )
+
+    purchased_id = db.execute(statement).scalar_one_or_none()
+
+    if purchased_id is None:
+        db.rollback()
+
+        vehicle_exists = db.scalar(
+            select(Vehicle.id).where(Vehicle.id == vehicle_id)
+        )
+
+        if vehicle_exists is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Vehicle not found.",
+            )
+
+        raise HTTPException(
+            status_code=409,
+            detail="Vehicle is out of stock.",
+        )
+
+    db.commit()
+
+    vehicle = db.get(Vehicle, vehicle_id)
+    return vehicle
+
+
+@router.post("/{vehicle_id}/restock", response_model=VehicleResponse)
+def restock_vehicle(
+    vehicle_id: int,
+    payload: RestockRequest,
+    admin: User = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    statement = (
+        update(Vehicle)
+        .where(Vehicle.id == vehicle_id)
+        .values(quantity=Vehicle.quantity + payload.quantity)
+        .returning(Vehicle.id)
+    )
+
+    restocked_id = db.execute(statement).scalar_one_or_none()
+
+    if restocked_id is None:
+        db.rollback()
+        raise HTTPException(
+            status_code=404,
+            detail="Vehicle not found.",
+        )
+
+    db.commit()
+
+    vehicle = db.get(Vehicle, vehicle_id)
+    return vehicle

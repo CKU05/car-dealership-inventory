@@ -1,6 +1,7 @@
 import os
 from collections.abc import Generator
 from decimal import Decimal
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from dotenv import load_dotenv
@@ -353,3 +354,146 @@ def test_search_rejects_invalid_price_range(
     )
 
     assert response.status_code == 422
+
+
+def create_test_vehicle(
+    client,
+    admin_token,
+    quantity=5,
+):
+    payload = vehicle_payload()
+    payload["quantity"] = quantity
+
+    response = client.post(
+        "/api/vehicles",
+        json=payload,
+        headers=auth(admin_token),
+    )
+
+    assert response.status_code == 201
+    return response.json()["id"]
+
+
+def test_purchase_decreases_stock(
+    client,
+    admin_token,
+    user_token,
+):
+    vehicle_id = create_test_vehicle(client, admin_token, quantity=5)
+
+    response = client.post(
+        f"/api/vehicles/{vehicle_id}/purchase",
+        headers=auth(user_token),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["quantity"] == 4
+
+
+def test_purchase_rejected_when_stock_is_zero(
+    client,
+    admin_token,
+    user_token,
+):
+    vehicle_id = create_test_vehicle(client, admin_token, quantity=0)
+
+    response = client.post(
+        f"/api/vehicles/{vehicle_id}/purchase",
+        headers=auth(user_token),
+    )
+
+    assert response.status_code == 409
+
+
+def test_purchase_nonexistent_vehicle_returns_404(
+    client,
+    user_token,
+):
+    response = client.post(
+        "/api/vehicles/999999/purchase",
+        headers=auth(user_token),
+    )
+
+    assert response.status_code == 404
+
+
+def test_purchase_requires_authentication(client):
+    response = client.post("/api/vehicles/1/purchase")
+
+    assert response.status_code == 401
+
+
+def test_admin_can_restock_vehicle(
+    client,
+    admin_token,
+):
+    vehicle_id = create_test_vehicle(client, admin_token, quantity=5)
+
+    response = client.post(
+        f"/api/vehicles/{vehicle_id}/restock",
+        json={"quantity": 10},
+        headers=auth(admin_token),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["quantity"] == 15
+
+
+def test_regular_user_cannot_restock(
+    client,
+    admin_token,
+    user_token,
+):
+    vehicle_id = create_test_vehicle(client, admin_token, quantity=5)
+
+    response = client.post(
+        f"/api/vehicles/{vehicle_id}/restock",
+        json={"quantity": 10},
+        headers=auth(user_token),
+    )
+
+    assert response.status_code == 403
+
+
+def test_restock_quantity_must_be_positive(
+    client,
+    admin_token,
+):
+    vehicle_id = create_test_vehicle(client, admin_token)
+
+    for quantity in [0, -1]:
+        response = client.post(
+            f"/api/vehicles/{vehicle_id}/restock",
+            json={"quantity": quantity},
+            headers=auth(admin_token),
+        )
+
+        assert response.status_code == 422
+
+
+def test_concurrent_purchases_cannot_oversell(
+    client,
+    admin_token,
+    user_token,
+):
+    vehicle_id = create_test_vehicle(client, admin_token, quantity=1)
+    url = f"/api/vehicles/{vehicle_id}/purchase"
+    headers = auth(user_token)
+
+    def purchase():
+        return client.post(url, headers=headers)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(lambda _: purchase(), range(2)))
+
+    statuses = sorted(response.status_code for response in results)
+
+    assert statuses == [200, 409]
+
+    inventory = client.get(
+        "/api/vehicles",
+        headers=headers,
+    ).json()
+
+    vehicle = next(v for v in inventory if v["id"] == vehicle_id)
+    assert vehicle["quantity"] == 0
